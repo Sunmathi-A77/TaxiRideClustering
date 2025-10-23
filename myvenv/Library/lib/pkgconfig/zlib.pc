@@ -1,0 +1,13 @@
+prefix=C:/TaxiPricePrediction/myvenv/Library
+exec_prefix=C:/TaxiPricePrediction/myvenv/Library
+libdir=C:/TaxiPricePrediction/myvenv/Library/lib
+sharedlibdir=C:/TaxiPricePrediction/myvenv/Library/lib
+includedir=C:/TaxiPricePrediction/myvenv/Library/include
+
+Name: zlib
+Description: zlib compression library
+Version: 1.3.1
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lz
+Cflags: -I${includedir}
