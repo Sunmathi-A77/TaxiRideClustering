@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans, DBSCAN
+from scipy.spatial.distance import cdist
 
 # ==============================
 # 🎯 Load Saved Models & Objects
@@ -30,20 +31,21 @@ with open("feature_columns.pkl", "rb") as f:
 # ==============================
 # 🧩 Helper Functions
 # ==============================
+def apply_skew(df, cols):
+    for col in cols:
+        if col in df.columns:
+            df[col] = np.log1p(df[col].clip(lower=0))
+    return df
 
 def clip_outliers(df, cols):
     for col in cols:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
-        IQR = Q3 - Q1
-        lower = Q1 - 1.5 * IQR
-        upper = Q3 + 1.5 * IQR
-        df[col] = np.clip(df[col], lower, upper)
-    return df
-
-def apply_skew(df, cols):
-    for col in cols:
-        df[col] = np.log1p(df[col])
+        if col in df.columns:
+            Q1 = df[col].quantile(0.25)
+            Q3 = df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            lower = Q1 - 1.5 * IQR
+            upper = Q3 + 1.5 * IQR
+            df[col] = np.clip(df[col], lower, upper)
     return df
 
 def encode_features(df):
@@ -55,57 +57,69 @@ def encode_features(df):
     return df
 
 def preprocess_input(df):
-    """Apply preprocessing exactly as in training."""
-    df = clip_outliers(df, ["Trip_Price", "Trip_Distance_km"])
-    df = apply_skew(df, ["Trip_Price", "Trip_Distance_km"])
     df = encode_features(df)
+    df = apply_skew(df, ["Trip_Price", "Trip_Distance_km"])
+    df = clip_outliers(df, ["Trip_Price", "Trip_Distance_km"])
 
-    # Align columns with training
+    # Align columns
     for col in feature_columns:
         if col not in df.columns:
             df[col] = 0
     df = df[feature_columns]
 
+    df = df.fillna(0)
+
     X_scaled = scaler.transform(df)
     X_pca = pca.transform(X_scaled)
     return X_pca
 
+# ✅ Custom KMeans single-point prediction
+def kmeans_custom_predict(model, X_new):
+    """
+    Predict cluster based on nearest centroid distance manually.
+    """
+    centers = model.cluster_centers_
+    dist = cdist(X_new, centers)
+    return np.argmin(dist, axis=1)
+
+# ✅ Custom DBSCAN single-point prediction
+def dbscan_predict(model, X_new):
+    """
+    Assign new samples to the nearest core point cluster if within eps distance.
+    """
+    if len(model.components_) == 0:
+        return np.array([-1])
+
+    core_samples = model.components_
+    core_labels = model.labels_[model.core_sample_indices_]
+
+    dist = cdist(X_new, core_samples)
+    min_dist = dist.min(axis=1)
+    nearest_index = dist.argmin(axis=1)
+    nearest_label = core_labels[nearest_index]
+
+    eps = model.eps
+    return np.where(min_dist <= eps, nearest_label, -1)
 
 # ==============================
-# 🌸 Streamlit UI Setup (Pink Blossom)
+# 🌸 Streamlit UI
 # ==============================
 st.set_page_config(page_title="🚖 Taxi Ride Clustering App", layout="centered")
 
-page_bg = """
+st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] {
     background-image: linear-gradient(to bottom right, #ffe6f0, #fff8fc);
 }
-[data-testid="stHeader"] {
-    background: rgba(0,0,0,0);
-}
-.stTextInput, .stNumberInput, .stSelectbox {
-    border-radius: 10px;
-}
+h1, h2, h3 { color: #cc007a; }
 div.stButton > button:first-child {
-    background-color: #ff99c8;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 24px;
-    font-weight: bold;
-    transition: all 0.3s ease;
+    background-color: #ff99c8; color: white; border-radius: 10px;
 }
 div.stButton > button:first-child:hover {
-    background-color: #ff80b5;
-    transform: scale(1.05);
-}
-h1, h2, h3 {
-    color: #cc007a;
+    background-color: #ff80b5; transform: scale(1.05);
 }
 </style>
-"""
-st.markdown(page_bg, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # ==============================
 # 🏙️ App Layout
@@ -145,7 +159,6 @@ model_choice = st.radio("Select Model:", ("KMeans", "Hierarchical", "DBSCAN"), h
 # 🚀 Predict Button
 # ------------------------------
 if st.button("🔮 Predict Cluster"):
-    # Prepare input DataFrame
     input_data = pd.DataFrame([{
         "Trip_Distance_km": trip_distance,
         "Trip_Duration_Minutes": trip_duration,
@@ -160,38 +173,31 @@ if st.button("🔮 Predict Cluster"):
         "Weather": weather
     }])
 
-    # Preprocess
     X_pca = preprocess_input(input_data)
 
-    # Handle Hierarchical separately
     if model_choice == "Hierarchical":
-        st.warning("⚠️ Hierarchical clustering doesn’t support single-point predictions. It is mainly used for visualization and grouping on full datasets.")
+        st.warning("⚠️ Hierarchical clustering doesn’t support single-point predictions.")
     else:
         if model_choice == "KMeans":
-            cluster = int(kmeans.predict(X_pca)[0])
+            cluster = int(kmeans_custom_predict(kmeans, X_pca)[0])
             descriptions = {
-                0: "Morning commuters with calm traffic and lower fares.",
-                1: "Typical city rides under normal conditions.",
-                2: "Evening/night rides with faster movement and slightly higher prices.",
-                3: "Longer trips with moderate fares, possibly suburban routes."
+                0: "🌅 Morning commuters with calm traffic and lower fares.",
+                1: "🔵 Typical city rides under normal conditions.",
+                2: "🌙 Evening/night rides with faster movement and slightly higher prices.",
+                3: "🛣️ Longer trips with moderate fares, possibly suburban routes."
             }
-
         elif model_choice == "DBSCAN":
-            # Use pre-trained DBSCAN model (no refitting)
-            labels = dbscan.fit_predict(X_pca)
-            cluster = int(labels[0]) if len(labels) > 0 else -1
+            cluster = int(dbscan_predict(dbscan, X_pca)[0])
             descriptions = {
-                0: "Regular city rides with average distance and fare.",
-                1: "Short, dense rides — possibly in heavy traffic zones.",
-                2: "Late-night or long-duration rides with higher fares.",
-                3: "Moderate city rides, consistent pricing patterns.",
-                4: "Frequent commuter trips with stable fares and short distances.",
-                5: "High-end or intercity rides — rare and expensive.",
-                6: "Compact trips during off-peak hours with low fares.",
-                -1: "Noise points — irregular or outlier rides not fitting clusters."
+                0: "🚕 Regular city rides with average distance and fare.",
+                1: "🚦 Short, dense rides — possibly in heavy traffic zones.",
+                2: "🌃 Late-night or long-duration rides with higher fares.",
+                3: "🟢 Moderate city rides, consistent pricing patterns.",
+                4: "🚌 Frequent commuter trips with stable fares and short distances.",
+                5: "💎 High-end or intercity rides — rare and expensive.",
+                -1: "⚠️ Noise points — irregular or outlier rides not fitting clusters."
             }
 
-        # Display Result
         st.success(f"✅ Predicted Cluster: **{cluster}** ({model_choice})")
         st.info(f"🧭 Description: {descriptions.get(cluster, 'No description available.')}")
 
