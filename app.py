@@ -24,6 +24,9 @@ with open("scaler.pkl", "rb") as f:
 with open("pca.pkl", "rb") as f:
     pca = pickle.load(f)
 
+with open("feature_columns.pkl", "rb") as f:
+    feature_columns = pickle.load(f)
+
 # ==============================
 # 🧩 Helper Functions
 # ==============================
@@ -52,13 +55,12 @@ def encode_features(df):
     return df
 
 def preprocess_input(df):
+    """Apply preprocessing exactly as in training."""
     df = clip_outliers(df, ["Trip_Price", "Trip_Distance_km"])
     df = apply_skew(df, ["Trip_Price", "Trip_Distance_km"])
     df = encode_features(df)
 
-    with open("feature_columns.pkl", "rb") as f:
-        feature_columns = pickle.load(f)
-
+    # Align columns with training
     for col in feature_columns:
         if col not in df.columns:
             df[col] = 0
@@ -67,6 +69,7 @@ def preprocess_input(df):
     X_scaled = scaler.transform(df)
     X_pca = pca.transform(X_scaled)
     return X_pca
+
 
 # ==============================
 # 🌸 Streamlit UI Setup (Pink Blossom)
@@ -108,7 +111,7 @@ st.markdown(page_bg, unsafe_allow_html=True)
 # 🏙️ App Layout
 # ==============================
 st.title("🚖 Taxi Ride Clustering Prediction")
-st.markdown("###  🔍 Predict which cluster a taxi ride belongs to using unsupervised models.")
+st.markdown("### 🔍 Predict which cluster a taxi ride belongs to using unsupervised models.")
 
 # ------------------------------
 # 🧾 Input Section
@@ -142,6 +145,7 @@ model_choice = st.radio("Select Model:", ("KMeans", "Hierarchical", "DBSCAN"), h
 # 🚀 Predict Button
 # ------------------------------
 if st.button("🔮 Predict Cluster"):
+    # Prepare input DataFrame
     input_data = pd.DataFrame([{
         "Trip_Distance_km": trip_distance,
         "Trip_Duration_Minutes": trip_duration,
@@ -156,21 +160,26 @@ if st.button("🔮 Predict Cluster"):
         "Weather": weather
     }])
 
+    # Preprocess
     X_pca = preprocess_input(input_data)
 
+    # Handle Hierarchical separately
     if model_choice == "Hierarchical":
         st.warning("⚠️ Hierarchical clustering doesn’t support single-point predictions. It is mainly used for visualization and grouping on full datasets.")
     else:
         if model_choice == "KMeans":
-            cluster = kmeans.predict(X_pca)[0]
+            cluster = int(kmeans.predict(X_pca)[0])
             descriptions = {
                 0: "Morning commuters with calm traffic and lower fares.",
                 1: "Typical city rides under normal conditions.",
                 2: "Evening/night rides with faster movement and slightly higher prices.",
                 3: "Longer trips with moderate fares, possibly suburban routes."
             }
+
         elif model_choice == "DBSCAN":
-            cluster = dbscan.fit_predict(X_pca)[0]
+            # Use pre-trained DBSCAN model (no refitting)
+            labels = dbscan.fit_predict(X_pca)
+            cluster = int(labels[0]) if len(labels) > 0 else -1
             descriptions = {
                 0: "Regular city rides with average distance and fare.",
                 1: "Short, dense rides — possibly in heavy traffic zones.",
@@ -182,6 +191,7 @@ if st.button("🔮 Predict Cluster"):
                 -1: "Noise points — irregular or outlier rides not fitting clusters."
             }
 
+        # Display Result
         st.success(f"✅ Predicted Cluster: **{cluster}** ({model_choice})")
         st.info(f"🧭 Description: {descriptions.get(cluster, 'No description available.')}")
 
